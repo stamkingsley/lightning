@@ -1,5 +1,5 @@
-use schema::envoy_client::EnvoyClient;
-use schema::{GetAccountRequest, IncreaseRequest, DecreaseRequest};
+use schema::lightning_client::LightningClient;
+use schema::{DecreaseRequest, GetAccountRequest, IncreaseRequest};
 use tonic::Request;
 
 mod schema {
@@ -8,7 +8,7 @@ mod schema {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = EnvoyClient::connect("http://127.0.0.1:50051").await?;
+    let mut client = LightningClient::connect("http://127.0.0.1:50051").await?;
 
     println!("Testing Lightning Balance Service...");
 
@@ -19,7 +19,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         currency_id: Some(1),
     });
     let response = client.get_account(request).await?;
-    println!("Get non-existent account response: {:?}", response.get_ref());
+    println!(
+        "Get non-existent account response: {:?}",
+        response.get_ref()
+    );
 
     // 测试增加余额
     println!("\n2. Testing increase...");
@@ -59,7 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         currency_id: None,
     });
     let response = client.get_account(request).await?;
-    println!("Get account all currencies response: {:?}", response.get_ref());
+    println!(
+        "Get account all currencies response: {:?}",
+        response.get_ref()
+    );
 
     // 测试减少余额
     println!("\n6. Testing decrease...");
@@ -79,7 +85,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         currency_id: None,
     });
     let response = client.get_account(request).await?;
-    println!("Final get account all currencies response: {:?}", response.get_ref());
+    println!(
+        "Final get account all currencies response: {:?}",
+        response.get_ref()
+    );
 
     // 测试余额不足的情况
     println!("\n8. Testing insufficient balance...");
