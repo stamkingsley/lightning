@@ -4,7 +4,7 @@ use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use schema::envoy_server::{Envoy, EnvoyServer};
+use schema::lightning_server::{Lightning, LightningServer};
 use schema::{
     DecreaseRequest, DecreaseResponse, GetAccountRequest, GetAccountResponse,
     IncreaseRequest, IncreaseResponse,
@@ -36,18 +36,18 @@ pub enum AsyncBalanceMessage {
 }
 
 // 高性能异步EnvoyService
-pub struct EnvoyService {
+pub struct LightningService {
     message_sender: Sender<AsyncBalanceMessage>,
 }
 
-impl EnvoyService {
+impl LightningService {
     pub fn new(message_sender: Sender<AsyncBalanceMessage>) -> Self {
         Self { message_sender }
     }
 }
 
 #[tonic::async_trait]
-impl Envoy for EnvoyService {
+impl Lightning for LightningService {
     async fn get_account(
         &self,
         request: Request<GetAccountRequest>,
@@ -136,7 +136,7 @@ impl Envoy for EnvoyService {
     }
 }
 
-pub fn create_server(message_sender: Sender<AsyncBalanceMessage>) -> EnvoyServer<EnvoyService> {
-    let service = EnvoyService::new(message_sender);
-    EnvoyServer::new(service)
+pub fn create_server(message_sender: Sender<AsyncBalanceMessage>) -> LightningServer<LightningService> {
+    let service = LightningService::new(message_sender);
+    LightningServer::new(service)
 }

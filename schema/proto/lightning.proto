@@ -46,7 +46,7 @@ message DecreaseResponse{
 }
 
 
-service Envoy {
+service Lightning {
   rpc getAccount (GetAccountRequest) returns (GetAccountResponse) {}
   rpc increase (IncreaseRequest) returns (IncreaseResponse) {}
   rpc decrease (DecreaseRequest) returns (DecreaseResponse) {}

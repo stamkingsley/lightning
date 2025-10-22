@@ -181,22 +181,22 @@ impl MessageProcessor {
             }
             crate::grpc::AsyncBalanceMessage::Increase { request_id: _, account_id, currency_id, amount, response_sender } => {
                 // 重用字符串避免分配
-                let mut amount_str = self.string_pool.get_string();
-                amount_str.push_str(&amount);
+                // let mut amount_str = self.string_pool.get_string();
+                // amount_str.push_str(&amount);
                 
-                let response = self.balance_manager.handle_increase(account_id, currency_id, &amount_str);
+                let response = self.balance_manager.handle_increase(account_id, currency_id, &amount);
                 
                 // 返回字符串到池中
-                self.string_pool.return_string(amount_str);
+                // self.string_pool.return_string(amount_str);
                 let _ = response_sender.send(response);
             }
             crate::grpc::AsyncBalanceMessage::Decrease { request_id: _, account_id, currency_id, amount, response_sender } => {
-                let mut amount_str = self.string_pool.get_string();
-                amount_str.push_str(&amount);
+                // let mut amount_str = self.string_pool.get_string();
+                // amount_str.push_str(&amount);
                 
-                let response = self.balance_manager.handle_decrease(account_id, currency_id, &amount_str);
+                let response = self.balance_manager.handle_decrease(account_id, currency_id, &amount);
                 
-                self.string_pool.return_string(amount_str);
+                // self.string_pool.return_string(amount_str);
                 let _ = response_sender.send(response);
             }
         }
