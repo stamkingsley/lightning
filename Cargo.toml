@@ -14,6 +14,7 @@ serde_json = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
 rust_decimal = "1.35"
 thiserror = "2.0.17"
+evmap = "11.0.0"
 
 [build-dependencies]
 tonic-prost-build = "*"

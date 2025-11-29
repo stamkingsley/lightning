@@ -45,6 +45,16 @@ message DecreaseResponse{
   optional Balance data = 3;
 }
 
+enum Type{
+  LIMIT = 0;
+  MARKET = 1;
+}
+
+enum Side{
+  BID = 0;
+  ASK = 1;
+}
+
 message PlaceOrderRequest{
   sint64 requestId = 1;
   sint32 symbolId = 2;
@@ -61,7 +71,7 @@ message PlaceOrderRequest{
 message PlaceOrderResponse{
   sint32  code = 1;
   optional string  message = 2;
-  optional Order data = 3;
+  sint64 id = 3;
 }
 
 service Lightning {

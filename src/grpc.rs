@@ -4,6 +4,7 @@ use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
+use crate::messages::SequencerMessage;
 use schema::lightning_server::{Lightning, LightningServer};
 use schema::{
     DecreaseRequest, DecreaseResponse, GetAccountRequest, GetAccountResponse, IncreaseRequest,
@@ -11,40 +12,18 @@ use schema::{
 };
 
 // 使用oneshot channel的异步消息类型
-#[derive(Debug)]
-pub enum AsyncBalanceMessage {
-    GetAccount {
-        request_id: Uuid,
-        account_id: i32,
-        currency_id: Option<i32>,
-        response_sender: oneshot::Sender<GetAccountResponse>,
-    },
-    Increase {
-        request_id: Uuid,
-        account_id: i32,
-        currency_id: i32,
-        amount: String,
-        response_sender: oneshot::Sender<IncreaseResponse>,
-    },
-    Decrease {
-        request_id: Uuid,
-        account_id: i32,
-        currency_id: i32,
-        amount: String,
-        response_sender: oneshot::Sender<DecreaseResponse>,
-    },
-}
+// 使用oneshot channel的异步消息类型
 
 // 高性能异步EnvoyService
 pub struct LightningService {
-    message_senders: Vec<Sender<AsyncBalanceMessage>>,
+    sequencer_senders: Vec<Sender<SequencerMessage>>,
     shard_count: usize,
 }
 
 impl LightningService {
-    pub fn new(message_senders: Vec<Sender<AsyncBalanceMessage>>, shard_count: usize) -> Self {
+    pub fn new(sequencer_senders: Vec<Sender<SequencerMessage>>, shard_count: usize) -> Self {
         Self {
-            message_senders,
+            sequencer_senders,
             shard_count,
         }
     }
@@ -62,7 +41,7 @@ impl Lightning for LightningService {
         // 使用oneshot channel，开销更小
         let (response_sender, response_receiver) = oneshot::channel();
 
-        let message = AsyncBalanceMessage::GetAccount {
+        let message = SequencerMessage::GetAccount {
             request_id,
             account_id: req.account_id,
             currency_id: req.currency_id,
@@ -71,7 +50,7 @@ impl Lightning for LightningService {
 
         // 计算分片索引
         let shard_index = (req.account_id % self.shard_count as i32).abs() as usize;
-        let sender = &self.message_senders[shard_index];
+        let sender = &self.sequencer_senders[shard_index];
 
         // 发送消息到 channel
         if let Err(e) = sender.send(message) {
@@ -95,7 +74,7 @@ impl Lightning for LightningService {
         // 使用oneshot channel
         let (response_sender, response_receiver) = oneshot::channel();
 
-        let message = AsyncBalanceMessage::Increase {
+        let message = SequencerMessage::Increase {
             request_id,
             account_id: req.account_id,
             currency_id: req.currency_id,
@@ -104,7 +83,7 @@ impl Lightning for LightningService {
         };
 
         let shard_index = (req.account_id % self.shard_count as i32).abs() as usize;
-        let sender = &self.message_senders[shard_index];
+        let sender = &self.sequencer_senders[shard_index];
 
         if let Err(e) = sender.send(message) {
             return Err(Status::internal(format!("Failed to send message: {}", e)));
@@ -127,7 +106,7 @@ impl Lightning for LightningService {
         // 使用oneshot channel
         let (response_sender, response_receiver) = oneshot::channel();
 
-        let message = AsyncBalanceMessage::Decrease {
+        let message = SequencerMessage::Decrease {
             request_id,
             account_id: req.account_id,
             currency_id: req.currency_id,
@@ -136,7 +115,7 @@ impl Lightning for LightningService {
         };
 
         let shard_index = (req.account_id % self.shard_count as i32).abs() as usize;
-        let sender = &self.message_senders[shard_index];
+        let sender = &self.sequencer_senders[shard_index];
 
         if let Err(e) = sender.send(message) {
             return Err(Status::internal(format!("Failed to send message: {}", e)));
@@ -148,12 +127,45 @@ impl Lightning for LightningService {
             Err(_) => Err(Status::internal("Failed to receive response")),
         }
     }
+
+    async fn place_order(
+        &self,
+        request: Request<schema::PlaceOrderRequest>,
+    ) -> Result<Response<schema::PlaceOrderResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Uuid::new_v4();
+
+        let (response_sender, response_receiver) = oneshot::channel();
+
+        let message = SequencerMessage::PlaceOrder {
+            request_id,
+            symbol_id: req.symbol_id,
+            account_id: req.account_id,
+            order_type: req.r#type,
+            side: req.side,
+            price: req.price.unwrap_or_default(),
+            quantity: req.quantity.unwrap_or_default(),
+            response_sender,
+        };
+
+        let shard_index = (req.account_id % self.shard_count as i32).abs() as usize;
+        let sender = &self.sequencer_senders[shard_index];
+
+        if let Err(e) = sender.send(message) {
+            return Err(Status::internal(format!("Failed to send message: {}", e)));
+        }
+
+        match response_receiver.await {
+            Ok(response) => Ok(Response::new(response)),
+            Err(_) => Err(Status::internal("Failed to receive response")),
+        }
+    }
 }
 
 pub fn create_server(
-    message_senders: Vec<Sender<AsyncBalanceMessage>>,
+    sequencer_senders: Vec<Sender<SequencerMessage>>,
     shard_count: usize,
 ) -> LightningServer<LightningService> {
-    let service = LightningService::new(message_senders, shard_count);
+    let service = LightningService::new(sequencer_senders, shard_count);
     LightningServer::new(service)
 }

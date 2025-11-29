@@ -1,12 +1,14 @@
 mod balance;
 mod grpc;
-mod utils;
+mod messages;
+mod processor;
 
 use crossbeam_channel;
-use grpc::{create_server, AsyncBalanceMessage};
+use grpc::create_server;
+use messages::{MatchMessage, SequencerMessage};
+use processor::{MatchProcessor, MessageProcessor};
 use std::thread;
 use tonic::transport::Server;
-use utils::MessageProcessor;
 
 pub const SHARD_COUNT: usize = 10;
 
@@ -18,13 +20,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut message_senders = Vec::new();
     let mut processor_handles = Vec::new();
 
+    // 创建撮合引擎channel列表
+    let mut match_senders = Vec::new();
+    let mut match_handles = Vec::new();
+
+    // 启动撮合引擎处理器
+    for i in 0..SHARD_COUNT {
+        let (match_sender, match_receiver) = crossbeam_channel::unbounded::<MatchMessage>();
+        match_senders.push(match_sender);
+
+        let processor = MatchProcessor::new(i, match_receiver);
+        let handle = thread::spawn(move || {
+            processor.run();
+        });
+        match_handles.push(handle);
+    }
+
     // 启动高性能消息处理器
     for i in 0..SHARD_COUNT {
-        let (message_sender, message_receiver) =
-            crossbeam_channel::unbounded::<AsyncBalanceMessage>();
+        let (message_sender, message_receiver) = crossbeam_channel::unbounded::<SequencerMessage>();
         message_senders.push(message_sender);
 
-        let processor = MessageProcessor::new(i, message_receiver);
+        let processor = MessageProcessor::new(i, message_receiver, match_senders.clone());
         let handle = thread::spawn(move || {
             processor.run();
         });
@@ -55,6 +72,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 等待处理器线程结束
     for handle in processor_handles {
+        handle.join().unwrap();
+    }
+
+    // 等待撮合引擎线程结束
+    for handle in match_handles {
         handle.join().unwrap();
     }
 

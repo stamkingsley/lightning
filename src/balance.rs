@@ -1,9 +1,7 @@
-use crossbeam_channel::{Receiver, Sender};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
-use uuid::Uuid;
 
 // 生成的 proto 代码
 pub mod schema {
@@ -44,7 +42,9 @@ impl AccountBalance {
 
     pub fn increase(&mut self, amount: Decimal) -> Result<(), BalanceError> {
         if amount <= Decimal::ZERO {
-            return Err(BalanceError::InvalidAmount("Amount must be positive".to_string()));
+            return Err(BalanceError::InvalidAmount(
+                "Amount must be positive".to_string(),
+            ));
         }
         self.total += amount;
         self.available += amount;
@@ -53,7 +53,9 @@ impl AccountBalance {
 
     pub fn decrease(&mut self, amount: Decimal) -> Result<(), BalanceError> {
         if amount <= Decimal::ZERO {
-            return Err(BalanceError::InvalidAmount("Amount must be positive".to_string()));
+            return Err(BalanceError::InvalidAmount(
+                "Amount must be positive".to_string(),
+            ));
         }
         if self.available < amount {
             return Err(BalanceError::InsufficientBalance);
@@ -65,7 +67,9 @@ impl AccountBalance {
 
     pub fn freeze(&mut self, amount: Decimal) -> Result<(), BalanceError> {
         if amount <= Decimal::ZERO {
-            return Err(BalanceError::InvalidAmount("Amount must be positive".to_string()));
+            return Err(BalanceError::InvalidAmount(
+                "Amount must be positive".to_string(),
+            ));
         }
         if self.available < amount {
             return Err(BalanceError::InsufficientBalance);
@@ -77,7 +81,9 @@ impl AccountBalance {
 
     pub fn unfreeze(&mut self, amount: Decimal) -> Result<(), BalanceError> {
         if amount <= Decimal::ZERO {
-            return Err(BalanceError::InvalidAmount("Amount must be positive".to_string()));
+            return Err(BalanceError::InvalidAmount(
+                "Amount must be positive".to_string(),
+            ));
         }
         if self.frozen < amount {
             return Err(BalanceError::InsufficientBalance);
@@ -103,34 +109,13 @@ impl Account {
     }
 
     pub fn get_balance(&mut self, currency_id: i32) -> &mut AccountBalance {
-        self.balances.entry(currency_id).or_insert_with(|| AccountBalance::new(currency_id))
+        self.balances
+            .entry(currency_id)
+            .or_insert_with(|| AccountBalance::new(currency_id))
     }
 }
 
 // 消息类型定义
-#[derive(Debug, Clone)]
-pub enum BalanceMessage {
-    GetAccount {
-        request_id: Uuid,
-        account_id: i32,
-        currency_id: Option<i32>,
-        response_sender: Sender<GetAccountResponse>,
-    },
-    Increase {
-        request_id: Uuid,
-        account_id: i32,
-        currency_id: i32,
-        amount: String,
-        response_sender: Sender<IncreaseResponse>,
-    },
-    Decrease {
-        request_id: Uuid,
-        account_id: i32,
-        currency_id: i32,
-        amount: String,
-        response_sender: Sender<DecreaseResponse>,
-    },
-}
 
 // 余额管理器
 #[derive(Debug)]
@@ -145,24 +130,11 @@ impl BalanceManager {
         }
     }
 
-    pub fn process_message(&mut self, message: BalanceMessage) {
-        match message {
-            BalanceMessage::GetAccount { request_id: _, account_id, currency_id, response_sender } => {
-                let response = self.handle_get_account(account_id, currency_id);
-                let _ = response_sender.send(response);
-            }
-            BalanceMessage::Increase { request_id: _, account_id, currency_id, amount, response_sender } => {
-                let response = self.handle_increase(account_id, currency_id, &amount);
-                let _ = response_sender.send(response);
-            }
-            BalanceMessage::Decrease { request_id: _, account_id, currency_id, amount, response_sender } => {
-                let response = self.handle_decrease(account_id, currency_id, &amount);
-                let _ = response_sender.send(response);
-            }
-        }
-    }
-
-    pub fn handle_get_account(&self, account_id: i32, currency_id: Option<i32>) -> GetAccountResponse {
+    pub fn handle_get_account(
+        &self,
+        account_id: i32,
+        currency_id: Option<i32>,
+    ) -> GetAccountResponse {
         // 检查账户是否存在
         let account = match self.accounts.get(&account_id) {
             Some(account) => account,
@@ -181,23 +153,29 @@ impl BalanceManager {
             Some(currency_id) => {
                 // 查询特定币种
                 if let Some(balance) = account.balances.get(&currency_id) {
-                    data.insert(currency_id, Balance {
-                        currency: currency_id.to_string(),
-                        value: balance.total.to_string(),
-                        frozen: balance.frozen.to_string(),
-                        available: balance.available.to_string(),
-                    });
+                    data.insert(
+                        currency_id,
+                        Balance {
+                            currency: currency_id.to_string(),
+                            value: balance.total.to_string(),
+                            frozen: balance.frozen.to_string(),
+                            available: balance.available.to_string(),
+                        },
+                    );
                 }
             }
             None => {
                 // 查询所有币种
                 for (&currency_id, balance) in &account.balances {
-                    data.insert(currency_id, Balance {
-                        currency: currency_id.to_string(),
-                        value: balance.total.to_string(),
-                        frozen: balance.frozen.to_string(),
-                        available: balance.available.to_string(),
-                    });
+                    data.insert(
+                        currency_id,
+                        Balance {
+                            currency: currency_id.to_string(),
+                            value: balance.total.to_string(),
+                            frozen: balance.frozen.to_string(),
+                            available: balance.available.to_string(),
+                        },
+                    );
                 }
             }
         }
@@ -209,7 +187,12 @@ impl BalanceManager {
         }
     }
 
-    pub fn handle_increase(&mut self, account_id: i32, currency_id: i32, amount_str: &str) -> IncreaseResponse {
+    pub fn handle_increase(
+        &mut self,
+        account_id: i32,
+        currency_id: i32,
+        amount_str: &str,
+    ) -> IncreaseResponse {
         let amount = match Decimal::from_str_exact(amount_str) {
             Ok(amount) => amount,
             Err(_) => {
@@ -221,7 +204,10 @@ impl BalanceManager {
             }
         };
 
-        let account = self.accounts.entry(account_id).or_insert_with(|| Account::new(account_id));
+        let account = self
+            .accounts
+            .entry(account_id)
+            .or_insert_with(|| Account::new(account_id));
         let balance = account.get_balance(currency_id);
 
         match balance.increase(amount) {
@@ -242,11 +228,16 @@ impl BalanceManager {
                 code: 400,
                 message: Some(e.to_string()),
                 data: None,
-            }
+            },
         }
     }
 
-    pub fn handle_decrease(&mut self, account_id: i32, currency_id: i32, amount_str: &str) -> DecreaseResponse {
+    pub fn handle_decrease(
+        &mut self,
+        account_id: i32,
+        currency_id: i32,
+        amount_str: &str,
+    ) -> DecreaseResponse {
         let amount = match Decimal::from_str_exact(amount_str) {
             Ok(amount) => amount,
             Err(_) => {
@@ -258,7 +249,10 @@ impl BalanceManager {
             }
         };
 
-        let account = self.accounts.entry(account_id).or_insert_with(|| Account::new(account_id));
+        let account = self
+            .accounts
+            .entry(account_id)
+            .or_insert_with(|| Account::new(account_id));
         let balance = account.get_balance(currency_id);
 
         match balance.decrease(amount) {
@@ -279,38 +273,7 @@ impl BalanceManager {
                 code: 400,
                 message: Some(e.to_string()),
                 data: None,
-            }
-        }
-    }
-}
-
-// 消息处理器
-pub struct MessageProcessor {
-    receiver: Receiver<BalanceMessage>,
-    balance_manager: BalanceManager,
-}
-
-impl MessageProcessor {
-    pub fn new(receiver: Receiver<BalanceMessage>) -> Self {
-        Self {
-            receiver,
-            balance_manager: BalanceManager::new(),
-        }
-    }
-
-    pub fn run(mut self) {
-        println!("Message processor started");
-        loop {
-            match self.receiver.recv() {
-                Ok(message) => {
-                    println!("Processing message: {:?}", message);
-                    self.balance_manager.process_message(message);
-                }
-                Err(_) => {
-                    println!("Channel closed, stopping processor");
-                    break;
-                }
-            }
+            },
         }
     }
 }
