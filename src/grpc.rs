@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use schema::lightning_server::{Lightning, LightningServer};
 use schema::{
-    DecreaseRequest, DecreaseResponse, GetAccountRequest, GetAccountResponse,
-    IncreaseRequest, IncreaseResponse,
+    DecreaseRequest, DecreaseResponse, GetAccountRequest, GetAccountResponse, IncreaseRequest,
+    IncreaseResponse,
 };
 
 // 使用oneshot channel的异步消息类型
@@ -37,12 +37,16 @@ pub enum AsyncBalanceMessage {
 
 // 高性能异步EnvoyService
 pub struct LightningService {
-    message_sender: Sender<AsyncBalanceMessage>,
+    message_senders: Vec<Sender<AsyncBalanceMessage>>,
+    shard_count: usize,
 }
 
 impl LightningService {
-    pub fn new(message_sender: Sender<AsyncBalanceMessage>) -> Self {
-        Self { message_sender }
+    pub fn new(message_senders: Vec<Sender<AsyncBalanceMessage>>, shard_count: usize) -> Self {
+        Self {
+            message_senders,
+            shard_count,
+        }
     }
 }
 
@@ -54,10 +58,10 @@ impl Lightning for LightningService {
     ) -> Result<Response<GetAccountResponse>, Status> {
         let req = request.into_inner();
         let request_id = Uuid::new_v4();
-        
+
         // 使用oneshot channel，开销更小
         let (response_sender, response_receiver) = oneshot::channel();
-        
+
         let message = AsyncBalanceMessage::GetAccount {
             request_id,
             account_id: req.account_id,
@@ -65,8 +69,12 @@ impl Lightning for LightningService {
             response_sender,
         };
 
+        // 计算分片索引
+        let shard_index = (req.account_id % self.shard_count as i32).abs() as usize;
+        let sender = &self.message_senders[shard_index];
+
         // 发送消息到 channel
-        if let Err(e) = self.message_sender.send(message) {
+        if let Err(e) = sender.send(message) {
             return Err(Status::internal(format!("Failed to send message: {}", e)));
         }
 
@@ -83,10 +91,10 @@ impl Lightning for LightningService {
     ) -> Result<Response<IncreaseResponse>, Status> {
         let req = request.into_inner();
         let request_id = Uuid::new_v4();
-        
+
         // 使用oneshot channel
         let (response_sender, response_receiver) = oneshot::channel();
-        
+
         let message = AsyncBalanceMessage::Increase {
             request_id,
             account_id: req.account_id,
@@ -95,7 +103,10 @@ impl Lightning for LightningService {
             response_sender,
         };
 
-        if let Err(e) = self.message_sender.send(message) {
+        let shard_index = (req.account_id % self.shard_count as i32).abs() as usize;
+        let sender = &self.message_senders[shard_index];
+
+        if let Err(e) = sender.send(message) {
             return Err(Status::internal(format!("Failed to send message: {}", e)));
         }
 
@@ -112,10 +123,10 @@ impl Lightning for LightningService {
     ) -> Result<Response<DecreaseResponse>, Status> {
         let req = request.into_inner();
         let request_id = Uuid::new_v4();
-        
+
         // 使用oneshot channel
         let (response_sender, response_receiver) = oneshot::channel();
-        
+
         let message = AsyncBalanceMessage::Decrease {
             request_id,
             account_id: req.account_id,
@@ -124,7 +135,10 @@ impl Lightning for LightningService {
             response_sender,
         };
 
-        if let Err(e) = self.message_sender.send(message) {
+        let shard_index = (req.account_id % self.shard_count as i32).abs() as usize;
+        let sender = &self.message_senders[shard_index];
+
+        if let Err(e) = sender.send(message) {
             return Err(Status::internal(format!("Failed to send message: {}", e)));
         }
 
@@ -136,7 +150,10 @@ impl Lightning for LightningService {
     }
 }
 
-pub fn create_server(message_sender: Sender<AsyncBalanceMessage>) -> LightningServer<LightningService> {
-    let service = LightningService::new(message_sender);
+pub fn create_server(
+    message_senders: Vec<Sender<AsyncBalanceMessage>>,
+    shard_count: usize,
+) -> LightningServer<LightningService> {
+    let service = LightningService::new(message_senders, shard_count);
     LightningServer::new(service)
 }

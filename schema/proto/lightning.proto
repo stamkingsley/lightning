@@ -45,9 +45,28 @@ message DecreaseResponse{
   optional Balance data = 3;
 }
 
+message PlaceOrderRequest{
+  sint64 requestId = 1;
+  sint32 symbolId = 2;
+  sint32 accountId = 3;
+  Type type = 4;
+  Side side = 5;
+  optional string price = 6;
+  optional string quantity = 7;
+  optional string volume = 8;
+  optional sint32 takerRate = 9;
+  optional sint32 makerRate = 10;
+}
+
+message PlaceOrderResponse{
+  sint32  code = 1;
+  optional string  message = 2;
+  optional Order data = 3;
+}
 
 service Lightning {
   rpc getAccount (GetAccountRequest) returns (GetAccountResponse) {}
   rpc increase (IncreaseRequest) returns (IncreaseResponse) {}
   rpc decrease (DecreaseRequest) returns (DecreaseResponse) {}
+  rpc placeOrder (PlaceOrderRequest) returns (PlaceOrderResponse) {}
 }
