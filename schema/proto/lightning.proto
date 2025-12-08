@@ -74,9 +74,49 @@ message PlaceOrderResponse{
   sint64 id = 3;
 }
 
+message PriceLevel {
+  string price = 1;
+  string quantity = 2;
+}
+
+message GetOrderBookRequest {
+  sint64 requestId = 1;
+  sint32 symbolId = 2;
+  optional sint32 levels = 3; // 深度档数，默认20档
+}
+
+message GetOrderBookResponse {
+  sint32 code = 1;
+  optional string message = 2;
+  sint32 symbolId = 3;
+  repeated PriceLevel bids = 4;   // 买盘，按价格降序
+  repeated PriceLevel asks = 5;   // 卖盘，按价格升序
+  optional string bestBid = 6;    // 最优买价
+  optional string bestAsk = 7;    // 最优卖价
+  optional string spread = 8;     // 价差
+  sint64 timestamp = 9;           // 时间戳
+}
+
+message CancelOrderRequest {
+  sint64 requestId = 1;   // 请求ID
+  sint32 symbolId = 2;    // 交易对ID
+  sint32 accountId = 3;   // 账户ID
+  sint64 orderId = 4;     // 要取消的订单ID
+}
+
+message CancelOrderResponse {
+  sint32 code = 1;              // 状态码
+  optional string message = 2;  // 状态消息
+  sint64 orderId = 3;          // 订单ID
+  optional string cancelledQuantity = 4; // 取消的数量
+  optional string refundAmount = 5;      // 退还的金额
+}
+
 service Lightning {
   rpc getAccount (GetAccountRequest) returns (GetAccountResponse) {}
   rpc increase (IncreaseRequest) returns (IncreaseResponse) {}
   rpc decrease (DecreaseRequest) returns (DecreaseResponse) {}
   rpc placeOrder (PlaceOrderRequest) returns (PlaceOrderResponse) {}
+  rpc getOrderBook (GetOrderBookRequest) returns (GetOrderBookResponse) {}
+  rpc cancelOrder (CancelOrderRequest) returns (CancelOrderResponse) {}
 }

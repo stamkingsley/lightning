@@ -1,13 +1,14 @@
-use crate::balance::schema;
+use crate::models::schema;
 use crossbeam_channel::Sender;
 use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::messages::SequencerMessage;
+use crate::messages::{MatchMessage, SequencerMessage};
 use schema::lightning_server::{Lightning, LightningServer};
 use schema::{
-    DecreaseRequest, DecreaseResponse, GetAccountRequest, GetAccountResponse, IncreaseRequest,
+    CancelOrderRequest, CancelOrderResponse, DecreaseRequest, DecreaseResponse, GetAccountRequest,
+    GetAccountResponse, GetOrderBookRequest, GetOrderBookResponse, IncreaseRequest,
     IncreaseResponse,
 };
 
@@ -17,13 +18,19 @@ use schema::{
 // 高性能异步EnvoyService
 pub struct LightningService {
     sequencer_senders: Vec<Sender<SequencerMessage>>,
+    match_senders: Vec<Sender<MatchMessage>>,
     shard_count: usize,
 }
 
 impl LightningService {
-    pub fn new(sequencer_senders: Vec<Sender<SequencerMessage>>, shard_count: usize) -> Self {
+    pub fn new(
+        sequencer_senders: Vec<Sender<SequencerMessage>>,
+        match_senders: Vec<Sender<MatchMessage>>,
+        shard_count: usize,
+    ) -> Self {
         Self {
             sequencer_senders,
+            match_senders,
             shard_count,
         }
     }
@@ -160,12 +167,74 @@ impl Lightning for LightningService {
             Err(_) => Err(Status::internal("Failed to receive response")),
         }
     }
+
+    async fn get_order_book(
+        &self,
+        request: Request<GetOrderBookRequest>,
+    ) -> Result<Response<GetOrderBookResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Uuid::new_v4();
+
+        let (response_sender, response_receiver) = oneshot::channel();
+
+        let message = MatchMessage::GetOrderBook {
+            request_id,
+            symbol_id: req.symbol_id,
+            levels: req.levels.unwrap_or(20),
+            response_sender,
+        };
+
+        // 路由到对应的 MatchProcessor (按symbol_id分片)
+        let shard_index = (req.symbol_id % self.shard_count as i32).abs() as usize;
+        let sender = &self.match_senders[shard_index];
+
+        if let Err(e) = sender.send(message) {
+            return Err(Status::internal(format!("Failed to send message: {}", e)));
+        }
+
+        match response_receiver.await {
+            Ok(response) => Ok(Response::new(response)),
+            Err(_) => Err(Status::internal("Failed to receive response")),
+        }
+    }
+
+    async fn cancel_order(
+        &self,
+        request: Request<CancelOrderRequest>,
+    ) -> Result<Response<CancelOrderResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Uuid::new_v4();
+
+        let (response_sender, response_receiver) = oneshot::channel();
+
+        let message = SequencerMessage::CancelOrder {
+            request_id,
+            symbol_id: req.symbol_id,
+            account_id: req.account_id,
+            order_id: req.order_id as u64,
+            response_sender,
+        };
+
+        // 路由到对应的 SequencerProcessor (按account_id分片)
+        let shard_index = (req.account_id % self.shard_count as i32).abs() as usize;
+        let sender = &self.sequencer_senders[shard_index];
+
+        if let Err(e) = sender.send(message) {
+            return Err(Status::internal(format!("Failed to send message: {}", e)));
+        }
+
+        match response_receiver.await {
+            Ok(response) => Ok(Response::new(response)),
+            Err(_) => Err(Status::internal("Failed to receive response")),
+        }
+    }
 }
 
 pub fn create_server(
     sequencer_senders: Vec<Sender<SequencerMessage>>,
+    match_senders: Vec<Sender<MatchMessage>>,
     shard_count: usize,
 ) -> LightningServer<LightningService> {
-    let service = LightningService::new(sequencer_senders, shard_count);
+    let service = LightningService::new(sequencer_senders, match_senders, shard_count);
     LightningServer::new(service)
 }

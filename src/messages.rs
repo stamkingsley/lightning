@@ -1,4 +1,5 @@
-use crate::balance::schema;
+use crate::matching::Trade;
+use crate::models::schema;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -35,6 +36,13 @@ pub enum SequencerMessage {
         quantity: String,
         response_sender: oneshot::Sender<schema::PlaceOrderResponse>,
     },
+    CancelOrder {
+        request_id: Uuid,
+        symbol_id: i32,
+        account_id: i32,
+        order_id: u64,
+        response_sender: oneshot::Sender<schema::CancelOrderResponse>,
+    },
 }
 
 #[derive(Debug)]
@@ -48,5 +56,30 @@ pub enum MatchMessage {
         price: String,
         quantity: String,
         response_sender: oneshot::Sender<schema::PlaceOrderResponse>,
+    },
+    GetOrderBook {
+        request_id: Uuid,
+        symbol_id: i32,
+        levels: i32,
+        response_sender: oneshot::Sender<schema::GetOrderBookResponse>,
+    },
+    CancelOrder {
+        request_id: Uuid,
+        symbol_id: i32,
+        account_id: i32,
+        order_id: u64,
+        response_sender: oneshot::Sender<schema::CancelOrderResponse>,
+    },
+}
+
+// 新增：成交执行消息，用于从撮合引擎回调到SequencerProcessor
+#[derive(Debug)]
+pub enum TradeExecutionMessage {
+    ExecuteTrade {
+        trade: Trade,
+        original_response_sender: oneshot::Sender<schema::PlaceOrderResponse>,
+    },
+    UnfreezeOrder {
+        order: crate::matching::Order,
     },
 }
