@@ -58,14 +58,6 @@ cargo run
 ### 运行演示
 
 ```bash
-# 基础订单处理演示
-cargo run --example order_demo
-
-# 撮合引擎功能演示
-cargo run --example matching_demo
-
-# Level2订单簿演示
-cargo run --example level2_demo
 ```
 
 ## 📡 API 接口

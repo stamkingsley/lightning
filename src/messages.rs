@@ -79,6 +79,15 @@ pub enum TradeExecutionMessage {
         trade: Trade,
         original_response_sender: oneshot::Sender<schema::PlaceOrderResponse>,
     },
+    // 单个账户结算消息：包含该账户的余额变更
+    SettleAccount {
+        account_id: i32,
+        symbol_id: i32,
+        deduct_currency_id: i32,  // 需要扣除的币种ID（从冻结余额扣除）
+        deduct_amount: rust_decimal::Decimal,  // 需要扣除的数量
+        add_currency_id: i32,      // 需要增加的币种ID（增加到可用余额）
+        add_amount: rust_decimal::Decimal,      // 需要增加的数量
+    },
     UnfreezeOrder {
         order: crate::matching::Order,
     },

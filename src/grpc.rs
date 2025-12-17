@@ -12,10 +12,7 @@ use schema::{
     IncreaseResponse,
 };
 
-// 使用oneshot channel的异步消息类型
-// 使用oneshot channel的异步消息类型
 
-// 高性能异步EnvoyService
 pub struct LightningService {
     sequencer_senders: Vec<Sender<SequencerMessage>>,
     match_senders: Vec<Sender<MatchMessage>>,

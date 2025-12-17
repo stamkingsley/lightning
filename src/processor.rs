@@ -119,7 +119,7 @@ impl MatchProcessor {
 
                 // 如果有成交，发送成交记录到余额管理器执行
                 if !trades.is_empty() {
-                    self.execute_trades(trades, order_id, response_sender);
+                    self.execute_trades(trades, order_id, account_id, response_sender);
                 } else {
                     // 没有成交，直接返回成功响应
                     let response = crate::models::schema::PlaceOrderResponse {
@@ -157,38 +157,141 @@ impl MatchProcessor {
         &self,
         trades: Vec<Trade>,
         order_id: u64,
+        taker_account_id: i32,
         response_sender: tokio::sync::oneshot::Sender<crate::models::schema::PlaceOrderResponse>,
     ) {
         println!(
-            "MatchProcessor {}: Executing {} trades for order {}",
+            "MatchProcessor {}: Executing {} trades for order {} (taker account: {})",
             self.id,
             trades.len(),
-            order_id
+            order_id,
+            taker_account_id
         );
 
-        // 发送每笔成交到对应的SequencerProcessor进行余额更新
+        if trades.is_empty() {
+            return;
+        }
+
+        // 获取交易对信息（所有 trades 应该有相同的 symbol_id）
+        let symbol_id = trades[0].symbol_id;
+        let symbol = match crate::models::get_symbol(symbol_id) {
+            Some(s) => s,
+            None => {
+                println!("MatchProcessor {}: Symbol {} not found", self.id, symbol_id);
+                return;
+            }
+        };
+
+        // 汇总 taker 的所有 trades（taker 只处理一次）
+        let mut taker_total_base = rust_decimal::Decimal::ZERO;
+        let mut taker_total_quote = rust_decimal::Decimal::ZERO;
+        let mut is_taker_buyer = false;
+
+        // 遍历所有 trades，汇总 taker 的结算金额，并为每个 maker 发送结算消息
         for trade in &trades {
-            // 买方账户余额更新
-            let buy_shard =
-                (trade.buy_account_id % self.sequencer_senders.len() as i32).abs() as usize;
-            if let Some(sender) = self.sequencer_senders.get(buy_shard) {
-                let trade_msg = TradeExecutionMessage::ExecuteTrade {
-                    trade: trade.clone(),
-                    original_response_sender: tokio::sync::oneshot::channel().0, // 临时占位
-                };
-                if let Err(e) = sender.send(trade_msg) {
-                    println!("Failed to send trade to sequencer {}: {}", buy_shard, e);
-                }
+            // 判断 taker 是买方还是卖方
+            is_taker_buyer = order_id == trade.buy_order_id;
+            let taker_account_id_in_trade = if is_taker_buyer {
+                trade.buy_account_id
+            } else {
+                trade.sell_account_id
+            };
+            let maker_account_id_in_trade = if is_taker_buyer {
+                trade.sell_account_id
+            } else {
+                trade.buy_account_id
+            };
+
+            // 汇总 taker 的结算金额
+            if taker_account_id_in_trade == taker_account_id {
+                let quote_amount = trade.price * trade.quantity;
+                taker_total_base += trade.quantity;
+                taker_total_quote += quote_amount;
             }
 
-            println!(
-                "Trade routed: symbol={}, buy_account={}, sell_account={}, price={}, quantity={}",
-                trade.symbol_id,
-                trade.buy_account_id,
-                trade.sell_account_id,
-                trade.price,
-                trade.quantity
-            );
+            // 为每个 maker 发送结算消息（每个 trade 都需要处理，因为可能涉及不同的 maker）
+            let maker_shard =
+                (maker_account_id_in_trade % self.sequencer_senders.len() as i32).abs() as usize;
+            
+            if let Some(sender) = self.sequencer_senders.get(maker_shard) {
+                let quote_amount = trade.price * trade.quantity;
+                
+                // maker 的结算：如果 maker 是买方，则扣除 quote，增加 base；如果 maker 是卖方，则扣除 base，增加 quote
+                let (deduct_currency_id, deduct_amount, add_currency_id, add_amount) = 
+                    if is_taker_buyer {
+                        // maker 是卖方：扣除 base currency，增加 quote currency
+                        (symbol.base, trade.quantity, symbol.quote, quote_amount)
+                    } else {
+                        // maker 是买方：扣除 quote currency，增加 base currency
+                        (symbol.quote, quote_amount, symbol.base, trade.quantity)
+                    };
+
+                let settle_msg = TradeExecutionMessage::SettleAccount {
+                    account_id: maker_account_id_in_trade,
+                    symbol_id: trade.symbol_id,
+                    deduct_currency_id,
+                    deduct_amount,
+                    add_currency_id,
+                    add_amount,
+                };
+
+                if let Err(e) = sender.send(settle_msg) {
+                    println!("Failed to send maker settle message to sequencer {}: {}", maker_shard, e);
+                } else {
+                    println!(
+                        "Maker settle routed: sequencer={}, account={}, symbol={}, deduct={} {}, add={} {}",
+                        maker_shard,
+                        maker_account_id_in_trade,
+                        trade.symbol_id,
+                        deduct_amount,
+                        deduct_currency_id,
+                        add_amount,
+                        add_currency_id
+                    );
+                }
+            }
+        }
+
+        // 为 taker 发送汇总的结算消息（只处理一次）
+        if taker_total_base > rust_decimal::Decimal::ZERO || taker_total_quote > rust_decimal::Decimal::ZERO {
+            let taker_shard =
+                (taker_account_id % self.sequencer_senders.len() as i32).abs() as usize;
+            
+            if let Some(sender) = self.sequencer_senders.get(taker_shard) {
+                // taker 的结算：如果 taker 是买方，则扣除 quote，增加 base；如果 taker 是卖方，则扣除 base，增加 quote
+                let (deduct_currency_id, deduct_amount, add_currency_id, add_amount) = 
+                    if is_taker_buyer {
+                        // taker 是买方：扣除 quote currency，增加 base currency
+                        (symbol.quote, taker_total_quote, symbol.base, taker_total_base)
+                    } else {
+                        // taker 是卖方：扣除 base currency，增加 quote currency
+                        (symbol.base, taker_total_base, symbol.quote, taker_total_quote)
+                    };
+
+                let settle_msg = TradeExecutionMessage::SettleAccount {
+                    account_id: taker_account_id,
+                    symbol_id,
+                    deduct_currency_id,
+                    deduct_amount,
+                    add_currency_id,
+                    add_amount,
+                };
+
+                if let Err(e) = sender.send(settle_msg) {
+                    println!("Failed to send taker settle message to sequencer {}: {}", taker_shard, e);
+                } else {
+                    println!(
+                        "Taker settle routed: sequencer={}, account={}, symbol={}, deduct={} {}, add={} {}",
+                        taker_shard,
+                        taker_account_id,
+                        symbol_id,
+                        deduct_amount,
+                        deduct_currency_id,
+                        add_amount,
+                        add_currency_id
+                    );
+                }
+            }
         }
 
         // 立即返回撮合成功响应
@@ -507,6 +610,27 @@ impl SequencerProcessor {
                     );
                 }
             }
+            TradeExecutionMessage::SettleAccount {
+                account_id,
+                symbol_id: _,
+                deduct_currency_id,
+                deduct_amount,
+                add_currency_id,
+                add_amount,
+            } => {
+                if let Err(e) = self.settle_account_balance(
+                    account_id,
+                    deduct_currency_id,
+                    deduct_amount,
+                    add_currency_id,
+                    add_amount,
+                ) {
+                    println!(
+                        "SequencerProcessor {}: Failed to settle account {}: {}",
+                        self.id, account_id, e
+                    );
+                }
+            }
             TradeExecutionMessage::UnfreezeOrder { order } => {
                 if let Err(e) = self.unfreeze_order_balance(&order) {
                     println!(
@@ -584,6 +708,62 @@ impl SequencerProcessor {
                 symbol.quote
             );
         }
+
+        Ok(())
+    }
+
+    fn settle_account_balance(
+        &mut self,
+        account_id: i32,
+        deduct_currency_id: i32,
+        deduct_amount: rust_decimal::Decimal,
+        add_currency_id: i32,
+        add_amount: rust_decimal::Decimal,
+    ) -> Result<(), BalanceError> {
+        // 检查账户是否属于当前分片
+        let account_shard = (account_id % 10).abs() as usize;
+        if account_shard != self.id {
+            // 不属于当前分片，不处理
+            return Ok(());
+        }
+
+        // 获取或创建账户
+        let account = self
+            .balance_manager
+            .accounts
+            .entry(account_id)
+            .or_insert_with(|| crate::models::Account::new(account_id));
+
+        // 1. 从冻结余额中扣除 deduct_currency
+        let deduct_balance = account.get_balance(deduct_currency_id);
+        if deduct_balance.frozen < deduct_amount {
+            println!(
+                "Warning: Insufficient frozen balance for account {}, currency {}, required: {}, available: {}",
+                account_id, deduct_currency_id, deduct_amount, deduct_balance.frozen
+            );
+            // 扣除所有可用的冻结余额
+            let actual_deduct = deduct_balance.frozen;
+            deduct_balance.frozen = rust_decimal::Decimal::ZERO;
+            deduct_balance.total -= actual_deduct;
+        } else {
+            deduct_balance.frozen -= deduct_amount;
+            deduct_balance.total -= deduct_amount;
+        }
+
+        // 2. 增加 add_currency 到可用余额
+        let add_balance = account.get_balance(add_currency_id);
+        add_balance.available += add_amount;
+        add_balance.total += add_amount;
+
+        println!(
+            "SequencerProcessor {}: Settled account {} - deducted {} {} from frozen, added {} {}",
+            self.id,
+            account_id,
+            deduct_amount,
+            deduct_currency_id,
+            add_amount,
+            add_currency_id
+        );
 
         Ok(())
     }

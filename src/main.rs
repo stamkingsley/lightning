@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Global currencies and symbols initialized");
 
     // 创建高性能channel列表
-    let mut message_senders = Vec::new();
+    let mut sequencer_senders = Vec::new();
     let mut processor_handles = Vec::new();
 
     // 创建撮合引擎channel列表
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 启动高性能消息处理器（SequencerProcessor）
     for i in 0..SHARD_COUNT {
         let (message_sender, message_receiver) = crossbeam_channel::unbounded::<SequencerMessage>();
-        message_senders.push(message_sender);
+        sequencer_senders.push(message_sender);
 
         let processor = SequencerProcessor::new(
             i,
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 创建高性能gRPC服务
-    let grpc_service = create_server(message_senders.clone(), match_senders.clone(), SHARD_COUNT);
+    let grpc_service = create_server(sequencer_senders.clone(), match_senders.clone(), SHARD_COUNT);
 
     // 配置高性能服务器
     let addr = "0.0.0.0:50051".parse()?;
@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = shutdown_tx.send(());
 
             // 关闭所有 channel，让处理器线程退出
-            drop(message_senders);
+            drop(sequencer_senders);
             drop(match_senders);
             drop(trade_execution_senders);
         }
