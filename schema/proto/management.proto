@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+package schema;
+
+import "lightning.proto";
+
+// Currency Management Messages
+message Currency {
+  sint32 id = 1;
+  string name = 2;
+  string displayName = 3;
+}
+
+message CreateCurrencyRequest {
+  string name = 1;
+  string displayName = 2;
+}
+
+message CreateCurrencyResponse {
+  sint32 code = 1;
+  optional string message = 2;
+  optional Currency data = 3;
+}
+
+message GetCurrencyRequest {
+  sint32 id = 1;
+}
+
+message GetCurrencyResponse {
+  sint32 code = 1;
+  optional string message = 2;
+  optional Currency data = 3;
+}
+
+message ListCurrenciesRequest {
+  optional sint32 page = 1;
+  optional sint32 pageSize = 2;
+}
+
+message ListCurrenciesResponse {
+  sint32 code = 1;
+  optional string message = 2;
+  repeated Currency data = 3;
+  optional sint32 total = 4;
+}
+
+message UpdateCurrencyRequest {
+  sint32 id = 1;
+  optional string name = 2;
+  optional string display_name = 3;
+}
+
+message UpdateCurrencyResponse {
+  sint32 code = 1;
+  optional string message = 2;
+  optional Currency data = 3;
+}
+
+message DeleteCurrencyRequest {
+  sint32 id = 1;
+}
+
+message DeleteCurrencyResponse {
+  sint32 code = 1;
+  optional string message = 2;
+}
+
+// Symbol Management Messages
+message Symbol {
+  sint32 id = 1;
+  string name = 2;
+  sint32 base = 3;   // base currency id
+  sint32 quote = 4;  // quote currency id
+}
+
+message CreateSymbolRequest {
+  string name = 1;
+  sint32 base = 2;   // base currency id
+  sint32 quote = 3;  // quote currency id
+}
+
+message CreateSymbolResponse {
+  sint32 code = 1;
+  optional string message = 2;
+  optional Symbol data = 3;
+}
+
+message GetSymbolRequest {
+  sint32 id = 1;
+}
+
+message GetSymbolResponse {
+  sint32 code = 1;
+  optional string message = 2;
+  optional Symbol data = 3;
+}
+
+message ListSymbolsRequest {
+  optional sint32 page = 1;
+  optional sint32 pageSize = 2;
+}
+
+message ListSymbolsResponse {
+  sint32 code = 1;
+  optional string message = 2;
+  repeated Symbol data = 3;
+  optional sint32 total = 4;
+}
+
+message UpdateSymbolRequest {
+  sint32 id = 1;
+  optional string name = 2;
+  optional sint32 base = 3;
+  optional sint32 quote = 4;
+}
+
+message UpdateSymbolResponse {
+  sint32 code = 1;
+  optional string message = 2;
+  optional Symbol data = 3;
+}
+
+message DeleteSymbolRequest {
+  sint32 id = 1;
+}
+
+message DeleteSymbolResponse {
+  sint32 code = 1;
+  optional string message = 2;
+}
+
+// Management Service
+service Management {
+  // Currency Management
+  rpc CreateCurrency (CreateCurrencyRequest) returns (CreateCurrencyResponse) {}
+  rpc GetCurrency (GetCurrencyRequest) returns (GetCurrencyResponse) {}
+  rpc ListCurrencies (ListCurrenciesRequest) returns (ListCurrenciesResponse) {}
+  rpc UpdateCurrency (UpdateCurrencyRequest) returns (UpdateCurrencyResponse) {}
+  rpc DeleteCurrency (DeleteCurrencyRequest) returns (DeleteCurrencyResponse) {}
+  
+  // Symbol Management
+  rpc CreateSymbol (CreateSymbolRequest) returns (CreateSymbolResponse) {}
+  rpc GetSymbol (GetSymbolRequest) returns (GetSymbolResponse) {}
+  rpc ListSymbols (ListSymbolsRequest) returns (ListSymbolsResponse) {}
+  rpc UpdateSymbol (UpdateSymbolRequest) returns (UpdateSymbolResponse) {}
+  rpc DeleteSymbol (DeleteSymbolRequest) returns (DeleteSymbolResponse) {}
+}

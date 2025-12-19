@@ -1,6 +1,7 @@
 use crate::matching::{MatchingEngine, Trade};
 use crate::messages::{MatchMessage, SequencerMessage, TradeExecutionMessage};
-use crate::models::{get_symbol, BalanceError};
+use crate::models::{BalanceError, ManagementManager};
+use std::sync::Arc;
 
 pub struct SequencerProcessor {
     id: usize,
@@ -8,6 +9,7 @@ pub struct SequencerProcessor {
     balance_manager: crate::models::BalanceManager,
     match_senders: Vec<crossbeam_channel::Sender<MatchMessage>>,
     trade_execution_receiver: crossbeam_channel::Receiver<TradeExecutionMessage>,
+    management_manager: Arc<ManagementManager>,
 }
 
 pub struct MatchProcessor {
@@ -15,6 +17,7 @@ pub struct MatchProcessor {
     receiver: crossbeam_channel::Receiver<MatchMessage>,
     matching_engine: MatchingEngine,
     sequencer_senders: Vec<crossbeam_channel::Sender<TradeExecutionMessage>>,
+    management_manager: Arc<ManagementManager>,
 }
 
 impl MatchProcessor {
@@ -22,12 +25,14 @@ impl MatchProcessor {
         id: usize,
         receiver: crossbeam_channel::Receiver<MatchMessage>,
         sequencer_senders: Vec<crossbeam_channel::Sender<TradeExecutionMessage>>,
+        management_manager: Arc<ManagementManager>,
     ) -> Self {
         Self {
             id,
             receiver,
             matching_engine: MatchingEngine::new(),
             sequencer_senders,
+            management_manager,
         }
     }
 
@@ -174,7 +179,7 @@ impl MatchProcessor {
 
         // 获取交易对信息（所有 trades 应该有相同的 symbol_id）
         let symbol_id = trades[0].symbol_id;
-        let symbol = match crate::models::get_symbol(symbol_id) {
+        let symbol = match self.management_manager.get_symbol(symbol_id) {
             Some(s) => s,
             None => {
                 println!("MatchProcessor {}: Symbol {} not found", self.id, symbol_id);
@@ -445,6 +450,7 @@ impl SequencerProcessor {
         receiver: crossbeam_channel::Receiver<SequencerMessage>,
         match_senders: Vec<crossbeam_channel::Sender<MatchMessage>>,
         trade_execution_receiver: crossbeam_channel::Receiver<TradeExecutionMessage>,
+        management_manager: Arc<ManagementManager>,
     ) -> Self {
         Self {
             id,
@@ -452,6 +458,7 @@ impl SequencerProcessor {
             balance_manager: crate::models::BalanceManager::new(),
             match_senders,
             trade_execution_receiver,
+            management_manager,
         }
     }
 
@@ -529,45 +536,54 @@ impl SequencerProcessor {
                 quantity,
                 response_sender,
             } => {
-                // 使用新的 handle_place_order 方法来处理订单和冻结余额
-                match self
-                    .balance_manager
-                    .handle_place_order(account_id, symbol_id, side, &price, &quantity)
-                {
-                    Ok((freeze_currency_id, freeze_amount)) => {
-                        println!("Order processed: account_id={}, symbol_id={}, side={}, frozen_currency={}, frozen_amount={}",
-                            account_id, symbol_id, side, freeze_currency_id, freeze_amount);
+                // 获取交易对信息
+                if let Some(symbol) = self.management_manager.get_symbol(symbol_id) {
+                    // 使用新的 handle_place_order 方法来处理订单和冻结余额
+                    match self
+                        .balance_manager
+                        .handle_place_order(account_id, symbol_id, side, &price, &quantity, &symbol)
+                    {
+                        Ok((freeze_currency_id, freeze_amount)) => {
+                            println!("Order processed: account_id={}, symbol_id={}, side={}, frozen_currency={}, frozen_amount={}",
+                                account_id, symbol_id, side, freeze_currency_id, freeze_amount);
 
-                        // 余额足够，发送到 MatchProcessor
-                        let match_message = MatchMessage::PlaceOrder {
-                            request_id,
-                            symbol_id,
-                            account_id,
-                            order_type,
-                            side,
-                            price,
-                            quantity,
-                            response_sender,
-                        };
+                            // 余额足够，发送到 MatchProcessor
+                            let match_message = MatchMessage::PlaceOrder {
+                                request_id,
+                                symbol_id,
+                                account_id,
+                                order_type,
+                                side,
+                                price,
+                                quantity,
+                                response_sender,
+                            };
 
-                        let shard_index =
-                            (symbol_id % self.match_senders.len() as i32).abs() as usize;
-                        let sender = &self.match_senders[shard_index];
+                            let shard_index =
+                                (symbol_id % self.match_senders.len() as i32).abs() as usize;
+                            let sender = &self.match_senders[shard_index];
 
-                        if let Err(_) = sender.send(match_message) {
-                            println!("Failed to forward to matcher - channel closed");
-                            // response_sender is moved to match_message, so we can't send response here
+                            if let Err(_) = sender.send(match_message) {
+                                println!("Failed to forward to matcher - channel closed");
+                                // response_sender is moved to match_message, so we can't send response here
+                            }
+                        }
+                        Err(e) => {
+                            let response = crate::models::schema::PlaceOrderResponse {
+                                code: 400,
+                                message: Some(format!("Failed to process order: {}", e)),
+                                id: 0,
+                            };
+                            let _ = response_sender.send(response);
                         }
                     }
-                    Err(e) => {
-                        // 余额不足或其他错误，返回错误响应
-                        let response = crate::models::schema::PlaceOrderResponse {
-                            code: 400,
-                            message: Some(format!("Order failed: {}", e)),
-                            id: 0,
-                        };
-                        let _ = response_sender.send(response);
-                    }
+                } else {
+                    let response = crate::models::schema::PlaceOrderResponse {
+                        code: 404,
+                        message: Some("Symbol not found".to_string()),
+                        id: 0,
+                    };
+                    let _ = response_sender.send(response);
                 }
             }
             SequencerMessage::CancelOrder {
@@ -644,7 +660,7 @@ impl SequencerProcessor {
 
     fn execute_single_trade(&mut self, trade: &Trade) -> Result<(), BalanceError> {
         // 获取交易对信息
-        let symbol = get_symbol(trade.symbol_id).ok_or(BalanceError::CurrencyNotFound)?;
+        let symbol = self.management_manager.get_symbol(trade.symbol_id).ok_or(BalanceError::CurrencyNotFound)?;
 
         // 买方：扣除冻结的 quote currency，增加 base currency
         let quote_amount = trade.price * trade.quantity;
@@ -773,10 +789,9 @@ impl SequencerProcessor {
         order: &crate::matching::Order,
     ) -> Result<(), BalanceError> {
         use crate::matching::OrderSide;
-        use crate::models::get_symbol;
 
         // 获取交易对信息
-        let symbol = get_symbol(order.symbol_id).ok_or(BalanceError::CurrencyNotFound)?;
+        let symbol = self.management_manager.get_symbol(order.symbol_id).ok_or(BalanceError::CurrencyNotFound)?;
 
         // 计算需要解冻的金额
         let remaining_quantity = order.remaining_quantity();

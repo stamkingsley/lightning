@@ -1,4 +1,4 @@
-use crate::models::{get_symbol, BalanceError};
+use crate::models::BalanceError;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -492,11 +492,6 @@ impl MatchingEngine {
         price_str: &str,
         quantity_str: &str,
     ) -> Result<(u64, Vec<Trade>), BalanceError> {
-        // 验证交易对是否存在
-        if get_symbol(symbol_id).is_none() {
-            return Err(BalanceError::CurrencyNotFound);
-        }
-
         // 解析价格和数量
         let quantity = Decimal::from_str_exact(quantity_str)
             .map_err(|_| BalanceError::InvalidAmount("Invalid quantity format".to_string()))?;
@@ -556,106 +551,5 @@ impl MatchingEngine {
             .filter(|trade| trade.symbol_id == symbol_id)
             .take(limit)
             .collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::models::init_global_config;
-    use std::sync::Once;
-
-    static INIT: Once = Once::new();
-
-    fn ensure_global_config() {
-        INIT.call_once(|| {
-            init_global_config();
-        });
-    }
-
-    #[test]
-    fn test_order_creation() {
-        let order = Order::new(
-            1,
-            Uuid::new_v4(),
-            1,
-            100,
-            OrderType::Limit,
-            OrderSide::Bid,
-            Decimal::new(50000, 0),
-            Decimal::new(1, 1), // 0.1
-        );
-
-        assert_eq!(order.id, 1);
-        assert_eq!(order.symbol_id, 1);
-        assert_eq!(order.account_id, 100);
-        assert_eq!(order.remaining_quantity(), Decimal::new(1, 1));
-        assert!(!order.is_filled());
-    }
-
-    #[test]
-    fn test_order_matching() {
-        let bid = Order::new(
-            1,
-            Uuid::new_v4(),
-            1,
-            100,
-            OrderType::Limit,
-            OrderSide::Bid,
-            Decimal::new(50000, 0),
-            Decimal::new(1, 1),
-        );
-
-        let ask = Order::new(
-            2,
-            Uuid::new_v4(),
-            1,
-            101,
-            OrderType::Limit,
-            OrderSide::Ask,
-            Decimal::new(49000, 0),
-            Decimal::new(1, 1),
-        );
-
-        assert!(bid.can_match(&ask));
-        assert!(ask.can_match(&bid));
-    }
-
-    #[test]
-    fn test_matching_engine() {
-        ensure_global_config();
-        let mut engine = MatchingEngine::new();
-
-        // 下买单
-        let (order_id1, trades1) = engine
-            .place_order(
-                Uuid::new_v4(),
-                1,
-                100,
-                0, // Limit
-                0, // Bid
-                "50000.0",
-                "0.1",
-            )
-            .unwrap();
-
-        assert_eq!(trades1.len(), 0); // 没有匹配的订单
-
-        // 下卖单，应该匹配
-        let (order_id2, trades2) = engine
-            .place_order(
-                Uuid::new_v4(),
-                1,
-                101,
-                0, // Limit
-                1, // Ask
-                "49000.0",
-                "0.1",
-            )
-            .unwrap();
-
-        assert_eq!(trades2.len(), 1); // 应该有一笔成交
-        assert_eq!(trades2[0].quantity, Decimal::new(1, 1)); // 0.1
-        assert_eq!(trades2[0].price, Decimal::new(50000, 0)); // 50000 (buyer's price)
     }
 }

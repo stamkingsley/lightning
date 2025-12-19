@@ -7,7 +7,7 @@ mod processor;
 use crossbeam_channel;
 use grpc::create_server;
 use messages::{MatchMessage, SequencerMessage, TradeExecutionMessage};
-use models::init_global_config;
+use models::ManagementManager;
 use processor::{MatchProcessor, SequencerProcessor};
 use std::thread;
 use tonic::transport::Server;
@@ -17,10 +17,6 @@ pub const SHARD_COUNT: usize = 10;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting High-Performance Lightning Balance Service...");
-
-    // 初始化全局配置
-    init_global_config();
-    println!("Global currencies and symbols initialized");
 
     // 创建高性能channel列表
     let mut sequencer_senders = Vec::new();
@@ -40,6 +36,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         trade_execution_receivers.push(receiver);
     }
 
+    // 创建管理管理器
+    let management_manager = std::sync::Arc::new(ManagementManager::new());
+
     // 启动高性能消息处理器（SequencerProcessor）
     for i in 0..SHARD_COUNT {
         let (message_sender, message_receiver) = crossbeam_channel::unbounded::<SequencerMessage>();
@@ -50,6 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             message_receiver,
             match_senders.clone(),
             trade_execution_receivers.remove(0),
+            management_manager.clone(),
         );
         let handle = thread::spawn(move || {
             processor.run();
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (match_sender, match_receiver) = crossbeam_channel::unbounded::<MatchMessage>();
         match_senders.push(match_sender);
 
-        let processor = MatchProcessor::new(i, match_receiver, trade_execution_senders.clone());
+        let processor = MatchProcessor::new(i, match_receiver, trade_execution_senders.clone(), management_manager.clone());
         let handle = thread::spawn(move || {
             processor.run();
         });
@@ -70,7 +70,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 创建高性能gRPC服务
-    let grpc_service = create_server(sequencer_senders.clone(), match_senders.clone(), SHARD_COUNT);
+    let (lightning_service, management_service) = create_server(
+        sequencer_senders.clone(),
+        match_senders.clone(),
+        SHARD_COUNT,
+        (*management_manager).clone(),
+    );
 
     // 配置高性能服务器
     let addr = "0.0.0.0:50051".parse()?;
@@ -81,7 +86,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 启动服务器，使用 graceful shutdown
     let server_future = Server::builder()
-        .add_service(grpc_service)
+        .add_service(lightning_service)
+        .add_service(management_service)
         .serve_with_shutdown(addr, async {
             shutdown_rx.await.ok();
         });

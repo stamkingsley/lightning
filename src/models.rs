@@ -1,7 +1,7 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
 // 生成的 proto 代码
@@ -27,6 +27,7 @@ pub enum BalanceError {
 pub struct Currency {
     pub id: i32,
     pub name: String,
+    pub display_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,55 +36,6 @@ pub struct Symbol {
     pub name: String,
     pub base: i32,  // base currency id
     pub quote: i32, // quote currency id
-}
-
-// 全局符号配置
-static GLOBAL_SYMBOLS: OnceLock<HashMap<i32, Symbol>> = OnceLock::new();
-static GLOBAL_CURRENCIES: OnceLock<HashMap<i32, Currency>> = OnceLock::new();
-
-pub fn init_global_config() {
-    // 初始化货币
-    GLOBAL_CURRENCIES.get_or_init(|| {
-        let mut currencies = HashMap::new();
-        currencies.insert(
-            1,
-            Currency {
-                id: 1,
-                name: "BTC".to_string(),
-            },
-        );
-        currencies.insert(
-            2,
-            Currency {
-                id: 2,
-                name: "USDT".to_string(),
-            },
-        );
-        currencies
-    });
-
-    // 初始化交易对
-    GLOBAL_SYMBOLS.get_or_init(|| {
-        let mut symbols = HashMap::new();
-        symbols.insert(
-            1,
-            Symbol {
-                id: 1,
-                name: "BTC-USDT".to_string(),
-                base: 1,  // BTC
-                quote: 2, // USDT
-            },
-        );
-        symbols
-    });
-}
-
-pub fn get_symbol(symbol_id: i32) -> Option<&'static Symbol> {
-    GLOBAL_SYMBOLS.get()?.get(&symbol_id)
-}
-
-pub fn get_currency(currency_id: i32) -> Option<&'static Currency> {
-    GLOBAL_CURRENCIES.get()?.get(&currency_id)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -372,9 +324,8 @@ impl BalanceManager {
         side: i32,
         price: &str,
         quantity: &str,
+        symbol: &Symbol,
     ) -> Result<(i32, String), BalanceError> {
-        // 获取交易对信息
-        let symbol = get_symbol(symbol_id).ok_or(BalanceError::CurrencyNotFound)?;
 
         let (freeze_currency_id, freeze_amount) = if side == 0 {
             // BID (买入): 冻结 quote currency，金额 = price * quantity
@@ -398,6 +349,138 @@ impl BalanceManager {
     }
 }
 
+// 货币和交易对管理器
+#[derive(Debug, Clone)]
+pub struct ManagementManager {
+    currencies: Arc<RwLock<HashMap<i32, Currency>>>,
+    symbols: Arc<RwLock<HashMap<i32, Symbol>>>,
+    next_currency_id: Arc<RwLock<i32>>,
+    next_symbol_id: Arc<RwLock<i32>>,
+}
+
+impl ManagementManager {
+    pub fn new() -> Self {
+        Self {
+            currencies: Arc::new(RwLock::new(HashMap::new())),
+            symbols: Arc::new(RwLock::new(HashMap::new())),
+            next_currency_id: Arc::new(RwLock::new(1)),
+            next_symbol_id: Arc::new(RwLock::new(1)),
+        }
+    }
+
+    pub fn get_currency(&self, id: i32) -> Option<Currency> {
+        self.currencies.read().ok()?.get(&id).cloned()
+    }
+
+    pub fn get_symbol(&self, id: i32) -> Option<Symbol> {
+        self.symbols.read().ok()?.get(&id).cloned()
+    }
+
+    pub fn create_currency(&self, name: String, display_name: String) -> Currency {
+        let mut next_id = self.next_currency_id.write().unwrap();
+        let id = *next_id;
+        *next_id += 1;
+
+        let currency = Currency {
+            id,
+            name: name.clone(),
+            display_name: display_name.clone(),
+        };
+
+        self.currencies.write().unwrap().insert(id, currency.clone());
+        currency
+    }
+
+    pub fn update_currency(&self, id: i32, name: Option<String>, display_name: Option<String>) -> Option<Currency> {
+        let mut currencies = self.currencies.write().ok()?;
+        let currency = currencies.get_mut(&id)?;
+
+        if let Some(name) = name {
+            currency.name = name;
+        }
+        if let Some(display_name) = display_name {
+            currency.display_name = display_name;
+        }
+
+        Some(currency.clone())
+    }
+
+    pub fn delete_currency(&self, id: i32) -> bool {
+        self.currencies.write().ok().map(|mut c| c.remove(&id).is_some()).unwrap_or(false)
+    }
+
+    pub fn list_currencies(&self, page: Option<i32>, page_size: Option<i32>) -> Vec<Currency> {
+        let currencies = self.currencies.read().unwrap();
+        let mut values: Vec<Currency> = currencies.values().cloned().collect();
+        values.sort_by_key(|c| c.id);
+
+        let page = page.unwrap_or(1);
+        let page_size = page_size.unwrap_or(100);
+        let start = ((page - 1) * page_size) as usize;
+        let end = (start + page_size as usize).min(values.len());
+
+        values[start..end].to_vec()
+    }
+
+    pub fn create_symbol(&self, name: String, base: i32, quote: i32) -> Result<Symbol, BalanceError> {
+        // 验证货币是否存在
+        if self.get_currency(base).is_none() {
+            return Err(BalanceError::CurrencyNotFound);
+        }
+        if self.get_currency(quote).is_none() {
+            return Err(BalanceError::CurrencyNotFound);
+        }
+
+        let mut next_id = self.next_symbol_id.write().unwrap();
+        let id = *next_id;
+        *next_id += 1;
+
+        let symbol = Symbol {
+            id,
+            name: name.clone(),
+            base,
+            quote,
+        };
+
+        self.symbols.write().unwrap().insert(id, symbol.clone());
+        Ok(symbol)
+    }
+
+    pub fn update_symbol(&self, id: i32, name: Option<String>, base: Option<i32>, quote: Option<i32>) -> Option<Symbol> {
+        let mut symbols = self.symbols.write().ok()?;
+        let symbol = symbols.get_mut(&id)?;
+
+        if let Some(name) = name {
+            symbol.name = name;
+        }
+        if let Some(base) = base {
+            symbol.base = base;
+        }
+        if let Some(quote) = quote {
+            symbol.quote = quote;
+        }
+
+        Some(symbol.clone())
+    }
+
+    pub fn delete_symbol(&self, id: i32) -> bool {
+        self.symbols.write().ok().map(|mut s| s.remove(&id).is_some()).unwrap_or(false)
+    }
+
+    pub fn list_symbols(&self, page: Option<i32>, page_size: Option<i32>) -> Vec<Symbol> {
+        let symbols = self.symbols.read().unwrap();
+        let mut values: Vec<Symbol> = symbols.values().cloned().collect();
+        values.sort_by_key(|s| s.id);
+
+        let page = page.unwrap_or(1);
+        let page_size = page_size.unwrap_or(100);
+        let start = ((page - 1) * page_size) as usize;
+        let end = (start + page_size as usize).min(values.len());
+
+        values[start..end].to_vec()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,15 +488,49 @@ mod tests {
 
     static INIT: Once = Once::new();
 
-    fn ensure_global_config() {
+    fn ensure_test_config() {
         INIT.call_once(|| {
-            init_global_config();
+            // 初始化测试用的货币和交易对
+            GLOBAL_CURRENCIES.get_or_init(|| {
+                let mut currencies = HashMap::new();
+                currencies.insert(
+                    1,
+                    Currency {
+                        id: 1,
+                        name: "BTC".to_string(),
+                        display_name: "Bitcoin".to_string(),
+                    },
+                );
+                currencies.insert(
+                    2,
+                    Currency {
+                        id: 2,
+                        name: "USDT".to_string(),
+                        display_name: "Tether USD".to_string(),
+                    },
+                );
+                currencies
+            });
+
+            GLOBAL_SYMBOLS.get_or_init(|| {
+                let mut symbols = HashMap::new();
+                symbols.insert(
+                    1,
+                    Symbol {
+                        id: 1,
+                        name: "BTC-USDT".to_string(),
+                        base: 1,  // BTC
+                        quote: 2, // USDT
+                    },
+                );
+                symbols
+            });
         });
     }
 
     #[test]
     fn test_currency_initialization() {
-        ensure_global_config();
+        ensure_test_config();
 
         let btc = get_currency(1).unwrap();
         assert_eq!(btc.id, 1);
@@ -426,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_symbol_initialization() {
-        ensure_global_config();
+        ensure_test_config();
 
         let btc_usdt = get_symbol(1).unwrap();
         assert_eq!(btc_usdt.id, 1);
@@ -463,7 +580,7 @@ mod tests {
 
     #[test]
     fn test_bid_order_processing() {
-        ensure_global_config();
+        ensure_test_config();
         let mut manager = BalanceManager::new();
 
         // 先给账户充值 USDT (quote currency)
@@ -493,7 +610,7 @@ mod tests {
 
     #[test]
     fn test_ask_order_processing() {
-        ensure_global_config();
+        ensure_test_config();
         let mut manager = BalanceManager::new();
 
         // 先给账户充值 BTC (base currency)
@@ -517,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_insufficient_balance_order() {
-        ensure_global_config();
+        ensure_test_config();
         let mut manager = BalanceManager::new();
 
         // 不给账户充值，直接下单
@@ -532,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_invalid_symbol_order() {
-        ensure_global_config();
+        ensure_test_config();
         let mut manager = BalanceManager::new();
 
         // 使用不存在的交易对
